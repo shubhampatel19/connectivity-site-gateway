@@ -1,4 +1,4 @@
-package io.github.spr732.connectivity.gateway;
+package io.github.shubhampatel19.connectivity.gateway;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -84,7 +84,7 @@ public final class Gateway {
         registry.gauge("connectivity_gateway_http_queue_depth", "Requests waiting for a free HTTP worker.", () -> httpPool.getQueue().size());
         registry.gauge("connectivity_gateway_upstream_inflight", "Cloud requests in progress.", upstream::inFlight);
         registry.gauge("connectivity_gateway_upstream_max_concurrency", "Cap on concurrent cloud requests.", cfg::upstreamMaxConcurrency);
-        registry.gauge("connectivity_gateway_queue_records", "Batches waiting in the store-and-forward queue.", queue::size);
+        registry.gauge("connectivity_gateway_queue_records", "Records (telemetry batches and alerts) waiting in the store-and-forward queue.", queue::size);
         registry.gauge("connectivity_gateway_queue_bytes", "Bytes waiting in the store-and-forward queue.", queue::bytes);
         registry.gaugeVec("connectivity_gateway_devices", "Devices in the site inventory, by status.", "status", inventory::countsByStatus);
 

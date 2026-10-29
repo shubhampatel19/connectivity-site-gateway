@@ -1,4 +1,4 @@
-package io.github.spr732.connectivity.gateway;
+package io.github.shubhampatel19.connectivity.gateway;
 
 import java.util.ArrayList;
 import java.util.Arrays;

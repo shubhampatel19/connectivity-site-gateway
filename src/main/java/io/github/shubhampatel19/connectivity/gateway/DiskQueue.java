@@ -1,4 +1,4 @@
-package io.github.spr732.connectivity.gateway;
+package io.github.shubhampatel19.connectivity.gateway;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -14,7 +14,8 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * The store-and-forward queue: one file per telemetry batch, named by a
+ * The store-and-forward queue: one file per record (a telemetry batch or a
+ * device alert), named by a
  * sequence number so a directory listing is the queue order. Files are
  * written to a temp name and renamed, so a crash never leaves a half-written
  * record. The queue is bounded by record count and bytes; when full, the
@@ -22,8 +23,29 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class DiskQueue {
 
-    /** One queued telemetry batch, as received from the device. */
-    public record Item(String deviceId, String authorization, String batchId, long receivedAt, String body) {
+    /**
+     * One queued request, as received from the device. {@code batchId} holds
+     * the record's own ID: the batch ID for telemetry, the alert ID for an
+     * alert. {@code path} is the cloud route to deliver it to; records written
+     * before alerts existed have none and are telemetry.
+     */
+    public record Item(String deviceId, String authorization, String batchId, long receivedAt, String body, String path) {
+        public static final String TELEMETRY = "/v1/telemetry";
+        public static final String ALERTS = "/v1/alerts";
+
+        public Item(String deviceId, String authorization, String batchId, long receivedAt, String body) {
+            this(deviceId, authorization, batchId, receivedAt, body, TELEMETRY);
+        }
+
+        /** Where to deliver it; queue files from before the field existed are telemetry. */
+        public String target() {
+            return path == null ? TELEMETRY : path;
+        }
+
+        /** The metrics label for this record's kind. */
+        public String kind() {
+            return ALERTS.equals(target()) ? "alerts" : "telemetry";
+        }
     }
 
     /** A queue slot. */

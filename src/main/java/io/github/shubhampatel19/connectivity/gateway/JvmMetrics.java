@@ -1,4 +1,4 @@
-package io.github.spr732.connectivity.gateway;
+package io.github.shubhampatel19.connectivity.gateway;
 
 import java.lang.management.BufferPoolMXBean;
 import java.lang.management.GarbageCollectorMXBean;

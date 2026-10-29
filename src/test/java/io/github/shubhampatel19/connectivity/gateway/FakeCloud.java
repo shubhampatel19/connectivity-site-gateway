@@ -1,4 +1,4 @@
-package io.github.spr732.connectivity.gateway;
+package io.github.shubhampatel19.connectivity.gateway;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -21,6 +21,7 @@ final class FakeCloud implements AutoCloseable {
 
     final List<Request> requests = new CopyOnWriteArrayList<>();
     volatile int telemetryStatus = 202;
+    volatile int alertsStatus = 202;
     volatile int otherStatus = 200;
     private final HttpServer server;
     private boolean closed;
@@ -32,7 +33,11 @@ final class FakeCloud implements AutoCloseable {
             Map<String, String> h = new HashMap<>();
             ex.getRequestHeaders().forEach((k, v) -> h.put(k.toLowerCase(Locale.ROOT), v.get(0)));
             String path = ex.getRequestURI().getPath();
-            int code = path.equals("/v1/telemetry") ? telemetryStatus : otherStatus;
+            int code = switch (path) {
+                case "/v1/telemetry" -> telemetryStatus;
+                case "/v1/alerts" -> alertsStatus;
+                default -> otherStatus;
+            };
             requests.add(new Request(ex.getRequestMethod(), path, h, body, code));
             byte[] resp = path.equals("/v1/register") && code == 200
                     ? "{\"device_id\":\"dev-1\",\"token\":\"tok\"}".getBytes(StandardCharsets.UTF_8)

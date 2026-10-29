@@ -1,4 +1,4 @@
-package io.github.spr732.connectivity.gateway;
+package io.github.shubhampatel19.connectivity.gateway;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -17,6 +17,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
@@ -77,6 +78,27 @@ class GatewayTest {
         String body = "{\"batch_id\":\"" + batchId + "\",\"device_id\":\"" + device
                 + "\",\"samples\":[{\"metric\":\"cpu_temp_c\",\"value\":50,\"ts\":\"2026-10-29T12:00:00Z\"}]}";
         return send("POST", "/v1/telemetry", body.getBytes(StandardCharsets.UTF_8), device(device));
+    }
+
+    private HttpResponse<String> alert(String device, String alertId) throws Exception {
+        String body = "{\"alert_id\":\"" + alertId + "\",\"device_id\":\"" + device
+                + "\",\"code\":\"thermal.critical\",\"severity\":\"critical\",\"value\":93,\"observed_at\":\"2026-10-29T12:00:00Z\"}";
+        return send("POST", "/v1/alerts", body.getBytes(StandardCharsets.UTF_8), device(device));
+    }
+
+    /** IDs the cloud accepted on the store-and-forward routes, in the order it accepted them. */
+    private List<String> acceptedIds() {
+        return cloud.requests.stream()
+                .filter(r -> r.status() == 202 && (r.path().equals("/v1/telemetry") || r.path().equals("/v1/alerts")))
+                .map(r -> {
+                    try {
+                        JsonNode n = json.readTree(r.body());
+                        return n.has("alert_id") ? n.get("alert_id").asText() : n.get("batch_id").asText();
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                })
+                .toList();
     }
 
     private static void waitUntil(BooleanSupplier cond, String what) throws InterruptedException {
@@ -147,7 +169,54 @@ class GatewayTest {
         waitUntil(() -> gateway.queue().isEmpty(), "the queue to drain");
 
         assertEquals(List.of("b1", "b2", "b3"), acceptedBatchIds());
-        assertTrue(metrics().contains("connectivity_gateway_forwarded_total 3"));
+        assertTrue(metrics().contains("connectivity_gateway_forwarded_total{kind=\"telemetry\"} 3"));
+    }
+
+    @Test
+    void alertGoesStraightThroughWhenCloudIsHealthy() throws Exception {
+        HttpResponse<String> r = alert("dev-1", "a1");
+        assertEquals(202, r.statusCode());
+        assertEquals(1, cloud.to("/v1/alerts").size());
+        assertEquals("Bearer tok-dev-1", cloud.to("/v1/alerts").get(0).headers().get("authorization"));
+        assertEquals(0, gateway.queue().size());
+    }
+
+    /** During an outage alerts queue with telemetry and are delivered in arrival order, both kinds interleaved. */
+    @Test
+    void alertsAreQueuedDuringOutageAndForwardedInArrivalOrder() throws Exception {
+        cloud.telemetryStatus = 503;
+        cloud.alertsStatus = 503;
+        assertTrue(telemetry("dev-1", "b1").body().contains("\"queued\":true"));
+        HttpResponse<String> a = alert("dev-1", "a1");
+        assertEquals(202, a.statusCode());
+        assertTrue(a.body().contains("\"queued\":true"), "the device must get an ack for a queued alert");
+        telemetry("dev-1", "b2");
+
+        cloud.telemetryStatus = 202;
+        cloud.alertsStatus = 202;
+        waitUntil(() -> gateway.queue().isEmpty(), "the queue to drain");
+        assertEquals(List.of("b1", "a1", "b2"), acceptedIds());
+        String m = metrics();
+        assertTrue(m.contains("connectivity_gateway_queued_total{kind=\"alerts\"} 1"), m);
+        assertTrue(m.contains("connectivity_gateway_forwarded_total{kind=\"alerts\"} 1"), m);
+        assertTrue(m.contains("connectivity_gateway_forwarded_total{kind=\"telemetry\"} 2"), m);
+    }
+
+    /** A gateway upgraded with a backlog on disk must still drain records written before alerts existed. */
+    @Test
+    void queueFilesFromBeforeAlertsStillDrainAsTelemetry() throws Exception {
+        gateway.stop();
+        Path queueDir = dir.resolve("queue");
+        Files.createDirectories(queueDir);
+        String oldRecord = "{\"deviceId\":\"dev-1\",\"authorization\":\"Bearer tok-dev-1\",\"batchId\":\"old-1\",\"receivedAt\":0,"
+                + "\"body\":\"{\\\"batch_id\\\":\\\"old-1\\\",\\\"device_id\\\":\\\"dev-1\\\"}\"}";
+        Files.writeString(queueDir.resolve(String.format("%020d.json", 1)), oldRecord);
+
+        gateway = startGateway(cloud.uri(), Map.of());
+        waitUntil(() -> gateway.queue().isEmpty(), "the pre-upgrade record to drain");
+        assertEquals(List.of("old-1"), acceptedIds());
+        assertTrue(cloud.to("/v1/alerts").isEmpty());
+        assertFalse(metrics().contains("reason=\"corrupt\""), "the old record must not be treated as corrupt");
     }
 
     @Test

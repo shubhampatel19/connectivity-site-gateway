@@ -1,4 +1,4 @@
-package io.github.spr732.connectivity.gateway;
+package io.github.shubhampatel19.connectivity.gateway;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -105,22 +105,23 @@ public final class Forwarder implements Runnable {
             return true; // evicted while we were working
         }
 
-        UpstreamClient.Response r = upstream.send("telemetry_forward", "POST", "/v1/telemetry", Map.of(
+        String kind = item.kind();
+        UpstreamClient.Response r = upstream.send(kind + "_forward", "POST", item.target(), Map.of(
                 "content-type", "application/json",
                 "x-device-id", item.deviceId(),
                 "authorization", item.authorization()), item.body().getBytes(StandardCharsets.UTF_8));
 
         if (r.outcome() == UpstreamClient.Outcome.OK) {
             queue.remove(e);
-            metrics.forwarded.inc();
+            metrics.forwarded.labels(kind).add(1);
             metrics.queueWait.observe(Math.max(0, clock.millis() - item.receivedAt()) / 1000.0);
             return true;
         }
         if (!r.transientFailure()) {
             queue.remove(e);
             metrics.dropped.labels("rejected").add(1);
-            log.warn("cloud rejected a queued batch, dropping it",
-                    "status", r.status(), "device_id", item.deviceId(), "batch_id", item.batchId());
+            log.warn("cloud rejected a queued record, dropping it",
+                    "kind", kind, "status", r.status(), "device_id", item.deviceId(), "id", item.batchId());
             return true;
         }
         String reason = r.outcome() == UpstreamClient.Outcome.CLIENT_ERROR ? "http_" + r.status()

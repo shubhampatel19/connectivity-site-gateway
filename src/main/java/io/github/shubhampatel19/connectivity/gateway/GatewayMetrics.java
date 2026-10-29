@@ -1,4 +1,4 @@
-package io.github.spr732.connectivity.gateway;
+package io.github.shubhampatel19.connectivity.gateway;
 
 /** The gateway's own metrics. JVM metrics are registered separately by {@link JvmMetrics}. */
 final class GatewayMetrics {
@@ -28,14 +28,14 @@ final class GatewayMetrics {
         upstreamDuration = r.histogram("connectivity_gateway_upstream_request_duration_seconds",
                 "Cloud request latency, by route.", LATENCY, "route");
         queued = r.counter("connectivity_gateway_queued_total",
-                "Telemetry batches accepted into the store-and-forward queue.");
+                "Records accepted into the store-and-forward queue, by kind (telemetry, alerts).", "kind");
         forwarded = r.counter("connectivity_gateway_forwarded_total",
-                "Queued batches delivered to the cloud.");
+                "Queued records delivered to the cloud, by kind (telemetry, alerts).", "kind");
         dropped = r.counter("connectivity_gateway_queue_dropped_total",
-                "Queued batches discarded, by reason (evicted, rejected, corrupt).", "reason");
+                "Queued records discarded, by reason (evicted, rejected, corrupt).", "reason");
         forwardFailures = r.counter("connectivity_gateway_forward_failures_total",
                 "Forwarding attempts that failed and paused draining, by reason.", "reason");
         queueWait = r.histogram("connectivity_gateway_queue_wait_seconds",
-                "Time a batch spent in the queue before the cloud accepted it.", QUEUE_WAIT);
+                "Time a record spent in the queue before the cloud accepted it.", QUEUE_WAIT);
     }
 }

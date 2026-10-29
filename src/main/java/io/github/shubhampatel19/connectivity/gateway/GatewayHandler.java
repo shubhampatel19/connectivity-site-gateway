@@ -1,4 +1,4 @@
-package io.github.spr732.connectivity.gateway;
+package io.github.shubhampatel19.connectivity.gateway;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,8 +21,10 @@ import java.util.regex.Pattern;
  * so a device switches to gateway mode just by pointing at it.
  *
  * <ul>
- *   <li>Telemetry is store-and-forward: sent straight through while the cloud
- *       is healthy and the queue is empty, otherwise queued on disk and acked.</li>
+ *   <li>Telemetry and alerts are store-and-forward: sent straight through
+ *       while the cloud is healthy and the queue is empty, otherwise queued on
+ *       disk and acked. They share one queue, so delivery order is arrival
+ *       order across both.</li>
  *   <li>Everything else (registration, heartbeats, log bundle chunks) is
  *       proxied. Devices already retry those, and bundles have their own
  *       spool at the edge.</li>
@@ -73,7 +75,8 @@ final class GatewayHandler implements HttpHandler {
         try {
             status = switch (route) {
                 case "register" -> register(ex);
-                case "telemetry" -> telemetry(ex);
+                case "telemetry" -> storeAndForward(ex, route, DiskQueue.Item.TELEMETRY, "batch_id");
+                case "alerts" -> storeAndForward(ex, route, DiskQueue.Item.ALERTS, "alert_id");
                 case "heartbeat", "bundle_init", "bundle_status", "bundle_chunk", "bundle_complete" -> proxy(ex, route);
                 case "devices" -> devices(ex);
                 case "metrics" -> respond(ex, 200, "text/plain; version=0.0.4; charset=utf-8",
@@ -109,6 +112,7 @@ final class GatewayHandler implements HttpHandler {
             case "POST /v1/register" -> "register";
             case "POST /v1/heartbeat" -> "heartbeat";
             case "POST /v1/telemetry" -> "telemetry";
+            case "POST /v1/alerts" -> "alerts";
             case "POST /v1/bundles" -> "bundle_init";
             case "GET /gateway/v1/devices" -> "devices";
             case "GET /metrics" -> "metrics";
@@ -143,16 +147,21 @@ final class GatewayHandler implements HttpHandler {
         return relay(ex, r);
     }
 
-    private int telemetry(HttpExchange ex) throws IOException, BodyTooLarge {
+    /**
+     * Telemetry and alerts: the gateway's job is to not lose them. An alert
+     * matters more than any one telemetry batch, because it is what opens a
+     * support case, so it gets the same durability.
+     */
+    private int storeAndForward(HttpExchange ex, String route, String path, String idField) throws IOException, BodyTooLarge {
         String deviceId = ex.getRequestHeaders().getFirst("X-Device-ID");
         String auth = ex.getRequestHeaders().getFirst("Authorization");
         if (deviceId == null || auth == null) {
             return error(ex, 401, "missing device credentials");
         }
         byte[] body = readBody(ex);
-        String batchId;
+        String recordId;
         try {
-            batchId = text(json.readTree(body), "batch_id");
+            recordId = text(json.readTree(body), idField);
         } catch (IOException e) {
             return error(ex, 400, "malformed JSON");
         }
@@ -162,18 +171,18 @@ final class GatewayHandler implements HttpHandler {
         // batch would overtake older ones, and a struggling cloud would get
         // hammered by every device instead of one paced forwarder.
         if (queue.isEmpty()) {
-            UpstreamClient.Response r = upstream.send("telemetry", "POST", "/v1/telemetry", headers(ex), body);
+            UpstreamClient.Response r = upstream.send(route, "POST", path, headers(ex), body);
             if (!r.transientFailure()) {
                 return relay(ex, r); // delivered, or rejected for good: the device decides
             }
         }
 
-        int evicted = queue.append(new DiskQueue.Item(deviceId, auth, batchId, clock.millis(),
-                new String(body, StandardCharsets.UTF_8)));
-        metrics.queued.inc();
+        int evicted = queue.append(new DiskQueue.Item(deviceId, auth, recordId, clock.millis(),
+                new String(body, StandardCharsets.UTF_8), path));
+        metrics.queued.labels(route).add(1);
         if (evicted > 0) {
             metrics.dropped.labels("evicted").add(evicted);
-            log.warn("queue full, evicted oldest batches", "evicted", evicted);
+            log.warn("queue full, evicted oldest records", "evicted", evicted);
         }
         return respond(ex, 202, "application/json",
                 ("{\"queued\":true,\"gateway_id\":\"" + gatewayId + "\"}").getBytes(StandardCharsets.UTF_8), null);
@@ -266,6 +275,6 @@ final class GatewayHandler implements HttpHandler {
     }
 
     static List<String> routes() {
-        return List.of("register", "heartbeat", "telemetry", "bundle_init", "bundle_status", "bundle_chunk", "bundle_complete");
+        return List.of("register", "heartbeat", "telemetry", "alerts", "bundle_init", "bundle_status", "bundle_chunk", "bundle_complete");
     }
 }
