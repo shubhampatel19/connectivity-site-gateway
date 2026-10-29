@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Build and test
+        run: |
+          set -o pipefail
+          mvn -B -ntp verify 2>&1 | tee /tmp/mvn.log
+      # Raw job logs need a separate download; annotations are readable straight from the API.
+      - name: Report failures
+        if: failure()
+        run: |
+          enc() { sed -e ':a' -e 'N' -e '$!ba' -e 's/%/%25/g' -e 's/\r//g' -e 's/\n/%0A/g'; }
+          errors=$(grep -E '^\[ERROR\]' /tmp/mvn.log | head -40 | enc)
+          [ -n "$errors" ] && echo "::error title=maven::$errors"
+          for f in target/surefire-reports/*.txt; do
+            [ -f "$f" ] && grep -qE 'FAILURE|ERROR' "$f" && echo "::error title=$(basename "$f" .txt)::$(head -c 3000 "$f" | enc)"
+          done
+          true
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: |
+          set -o pipefail
+          docker build -t site-gateway:ci . 2>&1 | tee /tmp/docker.log
+      - name: Start the image and check it answers
+        run: |
+          docker run -d --name gw -p 8090:8090 -e UPSTREAM_URL=http://127.0.0.1:9 site-gateway:ci
+          for _ in $(seq 1 30); do curl -fs localhost:8090/healthz && break; sleep 1; done
+          curl -fs localhost:8090/readyz
+          curl -fs localhost:8090/metrics | grep -q '^jvm_memory_used_bytes{area="heap"}'
+          echo "image starts, is ready with the cloud unreachable, and serves metrics"
+      - name: Report failures
+        if: failure()
+        run: |
+          enc() { sed -e ':a' -e 'N' -e '$!ba' -e 's/%/%25/g' -e 's/\r//g' -e 's/\n/%0A/g'; }
+          [ -f /tmp/docker.log ] && echo "::error title=docker build::$(tail -n 25 /tmp/docker.log | enc)"
+          docker logs gw > /tmp/gw.log 2>&1 && echo "::error title=container logs::$(tail -n 25 /tmp/gw.log | enc)"
+          true
