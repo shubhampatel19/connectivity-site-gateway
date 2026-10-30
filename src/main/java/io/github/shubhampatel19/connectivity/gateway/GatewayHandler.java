@@ -178,7 +178,7 @@ final class GatewayHandler implements HttpHandler {
         }
 
         int evicted = queue.append(new DiskQueue.Item(deviceId, auth, recordId, clock.millis(),
-                new String(body, StandardCharsets.UTF_8), path));
+                new String(body, StandardCharsets.UTF_8), path, ex.getRequestHeaders().getFirst("traceparent")));
         metrics.queued.labels(route).add(1);
         if (evicted > 0) {
             metrics.dropped.labels("evicted").add(evicted);

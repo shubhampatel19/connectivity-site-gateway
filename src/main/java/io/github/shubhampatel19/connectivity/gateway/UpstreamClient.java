@@ -34,9 +34,14 @@ public final class UpstreamClient {
         }
     }
 
-    /** Request headers passed to the cloud. Everything else stays at the site. */
+    /**
+     * Request headers passed to the cloud. Everything else stays at the site.
+     * traceparent and tracestate carry the device's trace through the
+     * gateway; x-gateway-queued-ms says how long a forwarded record waited.
+     */
     static final Set<String> FORWARDED_HEADERS = Set.of(
-            "content-type", "authorization", "x-device-id", "x-enrollment-key", "x-chunk-sha256", "x-request-id");
+            "content-type", "authorization", "x-device-id", "x-enrollment-key", "x-chunk-sha256", "x-request-id",
+            "traceparent", "tracestate", "x-gateway-queued-ms");
 
     private final URI base;
     private final String gatewayId;

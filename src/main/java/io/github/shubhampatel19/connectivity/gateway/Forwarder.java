@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -106,10 +107,18 @@ public final class Forwarder implements Runnable {
         }
 
         String kind = item.kind();
-        UpstreamClient.Response r = upstream.send(kind + "_forward", "POST", item.target(), Map.of(
+        Map<String, String> headers = new HashMap<>(Map.of(
                 "content-type", "application/json",
                 "x-device-id", item.deviceId(),
-                "authorization", item.authorization()), item.body().getBytes(StandardCharsets.UTF_8));
+                "authorization", item.authorization(),
+                // How long the record waited here, as a duration rather than a
+                // timestamp, so a skewed site clock can't distort it.
+                "x-gateway-queued-ms", Long.toString(Math.max(0, clock.millis() - item.receivedAt()))));
+        if (item.traceparent() != null) {
+            headers.put("traceparent", item.traceparent());
+        }
+        UpstreamClient.Response r = upstream.send(kind + "_forward", "POST", item.target(), headers,
+                item.body().getBytes(StandardCharsets.UTF_8));
 
         if (r.outcome() == UpstreamClient.Outcome.OK) {
             queue.remove(e);

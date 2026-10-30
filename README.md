@@ -37,6 +37,12 @@ Each of these is a design choice worth knowing during an incident:
 - **The forwarder is a single thread.** That preserves order and paces a recovering cloud, at the cost of drain throughput. Watch `connectivity_gateway_queue_wait_seconds` after an outage.
 - **Synchronous pass-through holds an HTTP worker for the whole cloud round trip.** When the cloud gets slow rather than down, that is where threads go.
 
+## Tracing
+
+The gateway doesn't record spans of its own; it keeps the device's trace intact. A request it forwards straight away carries the device's `traceparent` header. A request it queues stores the `traceparent` in its queue record, and the forwarder sends it with the record however long that takes, plus `X-Gateway-Queued-Ms` with the time it waited on disk. In Tempo, the device's send and the ingest API's span sit in the same trace, minutes apart after an outage, with the gap labelled.
+
+Queue records are read with unknown fields ignored, so a gateway rolled back to an older version can still drain records a newer one wrote. Versions from before this change don't do that, so rolling back across it with a backlog loses the backlog.
+
 ## Endpoints
 
 | Route | Purpose |

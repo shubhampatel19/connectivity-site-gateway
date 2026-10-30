@@ -308,4 +308,56 @@ class GatewayTest {
         assertEquals(200, send("GET", "/readyz", null, Map.of()).statusCode());
         assertNotNull(m);
     }
+
+    private static final String DEVICE_TRACE = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    private HttpResponse<String> tracedTelemetry(String device, String batchId) throws Exception {
+        Map<String, String> h = new HashMap<>(device(device));
+        h.put("traceparent", DEVICE_TRACE);
+        String body = "{\"batch_id\":\"" + batchId + "\",\"device_id\":\"" + device
+                + "\",\"samples\":[{\"metric\":\"cpu_temp_c\",\"value\":50,\"ts\":\"2026-10-29T12:00:00Z\"}]}";
+        return send("POST", "/v1/telemetry", body.getBytes(StandardCharsets.UTF_8), h);
+    }
+
+    @Test
+    void deviceTracePassesStraightThroughWhenCloudIsHealthy() throws Exception {
+        assertEquals(202, tracedTelemetry("dev-1", "b1").statusCode());
+        assertEquals(DEVICE_TRACE, cloud.to("/v1/telemetry").get(0).headers().get("traceparent"));
+    }
+
+    /** The device's trace survives the disk queue, and the cloud learns how long the record waited. */
+    @Test
+    void deviceTraceSurvivesTheQueue() throws Exception {
+        cloud.telemetryStatus = 503;
+        assertTrue(tracedTelemetry("dev-1", "b1").body().contains("\"queued\":true"));
+        assertEquals(DEVICE_TRACE, gateway.queue().read(gateway.queue().peek(1).get(0)).traceparent());
+
+        clock.advance(Duration.ofSeconds(90));
+        cloud.telemetryStatus = 202;
+        waitUntil(() -> gateway.queue().isEmpty(), "the queue to drain");
+
+        FakeCloud.Request delivered = cloud.to("/v1/telemetry").stream()
+                .filter(r -> r.status() == 202).findFirst().orElseThrow();
+        assertEquals(DEVICE_TRACE, delivered.headers().get("traceparent"));
+        long queuedMs = Long.parseLong(delivered.headers().get("x-gateway-queued-ms"));
+        assertTrue(queuedMs >= 90_000, "queued " + queuedMs + "ms, the clock moved 90s");
+    }
+
+    /** A record written by a newer gateway (an unknown field) still drains after a rollback. */
+    @Test
+    void queueFilesFromANewerGatewayStillDrain() throws Exception {
+        gateway.stop();
+        Path queueDir = dir.resolve("queue");
+        Files.createDirectories(queueDir);
+        String newer = "{\"deviceId\":\"dev-1\",\"authorization\":\"Bearer tok-dev-1\",\"batchId\":\"new-1\",\"receivedAt\":0,"
+                + "\"path\":\"/v1/telemetry\",\"traceparent\":null,\"someFutureField\":42,"
+                + "\"body\":\"{\\\"batch_id\\\":\\\"new-1\\\",\\\"device_id\\\":\\\"dev-1\\\"}\"}";
+        Files.writeString(queueDir.resolve(String.format("%020d.json", 1)), newer);
+
+        gateway = startGateway(cloud.uri(), Map.of());
+        waitUntil(() -> gateway.queue().isEmpty(), "the newer record to drain");
+        assertEquals(List.of("new-1"), acceptedIds());
+        assertFalse(metrics().contains("reason=\"corrupt\""), "an unknown field must not make a record corrupt");
+        assertEquals(null, cloud.to("/v1/telemetry").get(0).headers().get("traceparent"));
+    }
 }

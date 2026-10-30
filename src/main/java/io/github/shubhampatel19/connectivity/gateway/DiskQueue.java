@@ -27,14 +27,22 @@ public final class DiskQueue {
      * One queued request, as received from the device. {@code batchId} holds
      * the record's own ID: the batch ID for telemetry, the alert ID for an
      * alert. {@code path} is the cloud route to deliver it to; records written
-     * before alerts existed have none and are telemetry.
+     * before alerts existed have none and are telemetry. {@code traceparent}
+     * is the device's W3C trace context, kept so the forwarded request joins
+     * the device's trace however long the record waits; records written
+     * before tracing have none.
      */
-    public record Item(String deviceId, String authorization, String batchId, long receivedAt, String body, String path) {
+    public record Item(String deviceId, String authorization, String batchId, long receivedAt, String body, String path,
+                       String traceparent) {
         public static final String TELEMETRY = "/v1/telemetry";
         public static final String ALERTS = "/v1/alerts";
 
         public Item(String deviceId, String authorization, String batchId, long receivedAt, String body) {
-            this(deviceId, authorization, batchId, receivedAt, body, TELEMETRY);
+            this(deviceId, authorization, batchId, receivedAt, body, TELEMETRY, null);
+        }
+
+        public Item(String deviceId, String authorization, String batchId, long receivedAt, String body, String path) {
+            this(deviceId, authorization, batchId, receivedAt, body, path, null);
         }
 
         /** Where to deliver it; queue files from before the field existed are telemetry. */

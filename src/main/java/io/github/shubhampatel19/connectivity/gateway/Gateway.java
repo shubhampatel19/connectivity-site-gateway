@@ -1,5 +1,6 @@
 package io.github.shubhampatel19.connectivity.gateway;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -46,7 +47,9 @@ public final class Gateway {
     }
 
     static Gateway start(Config cfg, Log log, Clock clock, Duration retryBase, Duration retryMax) throws IOException {
-        ObjectMapper json = new ObjectMapper();
+        // Unknown fields are ignored, so a gateway rolled back to an older
+        // version can still drain queue records a newer one wrote.
+        ObjectMapper json = new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         MetricsRegistry registry = new MetricsRegistry();
         GatewayMetrics metrics = new GatewayMetrics(registry);
         JvmMetrics.register(registry);
