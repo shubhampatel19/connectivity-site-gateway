@@ -10,6 +10,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -46,9 +47,14 @@ final class GatewayHandler implements HttpHandler {
     private final ObjectMapper json;
     private final Clock clock;
     private final Log log;
+    private final Credentials credentials;
+    private final Duration bulkTimeout;
 
     GatewayHandler(String gatewayId, long maxBodyBytes, UpstreamClient upstream, DiskQueue queue, Inventory inventory,
-                   MetricsRegistry registry, GatewayMetrics metrics, ObjectMapper json, Clock clock, Log log) {
+                   MetricsRegistry registry, GatewayMetrics metrics, ObjectMapper json, Clock clock, Log log,
+                   Credentials credentials, Duration bulkTimeout) {
+        this.credentials = credentials;
+        this.bulkTimeout = bulkTimeout;
         this.gatewayId = gatewayId;
         this.maxBodyBytes = maxBodyBytes;
         this.upstream = upstream;
@@ -166,6 +172,9 @@ final class GatewayHandler implements HttpHandler {
             return error(ex, 400, "malformed JSON");
         }
         inventory.seen(deviceId);
+        // The forwarder delivers this device's older records with the
+        // newest credentials it has presented; see Credentials.
+        credentials.seen(deviceId, auth);
 
         // Send straight through only when nothing is waiting: otherwise a new
         // batch would overtake older ones, and a struggling cloud would get
@@ -195,7 +204,15 @@ final class GatewayHandler implements HttpHandler {
         }
         byte[] body = readBody(ex);
         String path = ex.getRequestURI().getRawPath();
-        return relay(ex, upstream.send(route, ex.getRequestMethod(), path, headers(ex), body));
+        // A bundle chunk, or the cloud assembling a finished bundle, takes far
+        // longer than a heartbeat, above all on a thin uplink. With the
+        // ordinary timeout a chunk that can't cross the WAN in time fails
+        // forever.
+        boolean bulk = route.equals("bundle_chunk") || route.equals("bundle_complete");
+        UpstreamClient.Response r = bulk
+                ? upstream.send(route, ex.getRequestMethod(), path, headers(ex), body, bulkTimeout)
+                : upstream.send(route, ex.getRequestMethod(), path, headers(ex), body);
+        return relay(ex, r);
     }
 
     private int devices(HttpExchange ex) throws IOException {

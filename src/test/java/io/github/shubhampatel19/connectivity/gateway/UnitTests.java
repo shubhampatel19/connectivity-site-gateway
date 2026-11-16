@@ -143,6 +143,17 @@ class UnitTests {
         }
 
         @Test
+        void appendLeavesNoTemporaryFileAndTheRecordIsOnDisk() throws Exception {
+            DiskQueue q = new DiskQueue(dir, 100, 1 << 20, JSON);
+            q.append(item("b1"));
+            try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.list(dir)) {
+                java.util.List<String> names = files.map(p -> p.getFileName().toString()).toList();
+                assertEquals(java.util.List.of("00000000000000000001.json"), names);
+            }
+            assertTrue(java.nio.file.Files.size(dir.resolve("00000000000000000001.json")) > 0);
+        }
+
+        @Test
         void halfWrittenFilesAreCleanedUp() throws Exception {
             Files.writeString(dir.resolve("00000000000000000007.json.tmp"), "{");
             DiskQueue q = new DiskQueue(dir, 100, 1 << 20, JSON);

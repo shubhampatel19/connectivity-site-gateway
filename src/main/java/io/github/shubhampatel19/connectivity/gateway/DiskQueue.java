@@ -2,11 +2,14 @@ package io.github.shubhampatel19.connectivity.gateway;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -17,9 +20,13 @@ import java.util.concurrent.atomic.AtomicLong;
  * The store-and-forward queue: one file per record (a telemetry batch or a
  * device alert), named by a
  * sequence number so a directory listing is the queue order. Files are
- * written to a temp name and renamed, so a crash never leaves a half-written
- * record. The queue is bounded by record count and bytes; when full, the
- * oldest records are evicted, the same trade-off the devices make.
+ * written to a temp name, flushed to the disk, renamed, and the directory is
+ * flushed too. Only then does append return, so a 202 from the gateway means
+ * the record survives the gateway losing power, not just the process dying.
+ * (Without the two flushes the data can sit in the operating system's cache
+ * for seconds, and a rename can be lost or can point at an empty file.)
+ * The queue is bounded by record count and bytes; when full, the oldest
+ * records are evicted, the same trade-off the devices make.
  */
 public final class DiskQueue {
 
@@ -103,8 +110,16 @@ public final class DiskQueue {
         byte[] data = json.writeValueAsBytes(item);
         Path target = dir.resolve(String.format("%020d.json", seq));
         Path tmp = dir.resolve(target.getFileName() + ".tmp");
-        Files.write(tmp, data);
+        try (FileChannel ch = FileChannel.open(tmp, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING)) {
+            ByteBuffer buf = ByteBuffer.wrap(data);
+            while (buf.hasRemaining()) {
+                ch.write(buf);
+            }
+            ch.force(true);
+        }
         Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
+        syncDirectory();
         index.put(seq, new Entry(seq, target, data.length));
         bytes.addAndGet(data.length);
 
@@ -118,6 +133,20 @@ public final class DiskQueue {
             evicted++;
         }
         return evicted;
+    }
+
+    /**
+     * Flushes the directory entry created by the rename. Opening a directory
+     * for reading and forcing it works on Linux, which is where the gateway
+     * runs; where it isn't supported the rename is still atomic, just not
+     * yet durable.
+     */
+    private void syncDirectory() {
+        try (FileChannel d = FileChannel.open(dir, StandardOpenOption.READ)) {
+            d.force(true);
+        } catch (IOException | UnsupportedOperationException unsupported) {
+            // Not every platform lets a directory be opened this way.
+        }
     }
 
     /** The oldest n entries, without removing them. */

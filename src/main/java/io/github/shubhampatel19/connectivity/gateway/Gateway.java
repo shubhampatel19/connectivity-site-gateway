@@ -65,7 +65,9 @@ public final class Gateway {
 
         UpstreamClient upstream = new UpstreamClient(cfg.upstream(), cfg.gatewayId(), cfg.upstreamConnectTimeout(),
                 cfg.upstreamTimeout(), cfg.upstreamMaxConcurrency(), cfg.upstreamAcquireTimeout(), metrics);
-        Forwarder forwarder = new Forwarder(queue, upstream, metrics, log, clock, retryBase, retryMax);
+        Credentials credentials = new Credentials();
+        Forwarder forwarder = new Forwarder(queue, upstream, metrics, log, clock, retryBase, retryMax,
+                credentials, cfg.authRejectGrace());
 
         // A fixed pool with a bounded queue, like a servlet container's
         // connector. When both fill up, new connections are dropped and counted.
@@ -93,7 +95,7 @@ public final class Gateway {
 
         HttpServer server = HttpServer.create(new InetSocketAddress(cfg.port()), 0);
         server.createContext("/", new GatewayHandler(cfg.gatewayId(), cfg.maxBodyBytes(), upstream, queue, inventory,
-                registry, metrics, json, clock, log));
+                registry, metrics, json, clock, log, credentials, cfg.upstreamBulkTimeout()));
         server.setExecutor(httpPool);
 
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {

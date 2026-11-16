@@ -20,10 +20,12 @@ public record Config(
         long maxBodyBytes,
         Duration upstreamTimeout,
         Duration upstreamConnectTimeout,
+        Duration upstreamBulkTimeout,
         int upstreamMaxConcurrency,
         Duration upstreamAcquireTimeout,
         long queueMaxRecords,
         long queueMaxBytes,
+        Duration authRejectGrace,
         Duration staleAfter,
         Duration offlineAfter) {
 
@@ -39,10 +41,12 @@ public record Config(
                 e.longValue("MAX_BODY_BYTES", 2L << 20),
                 e.duration("UPSTREAM_TIMEOUT", Duration.ofSeconds(10)),
                 e.duration("UPSTREAM_CONNECT_TIMEOUT", Duration.ofSeconds(3)),
+                e.duration("UPSTREAM_BULK_TIMEOUT", Duration.ofMinutes(2)),
                 e.integer("UPSTREAM_MAX_CONCURRENCY", 16),
                 e.duration("UPSTREAM_ACQUIRE_TIMEOUT", Duration.ofSeconds(2)),
                 e.longValue("QUEUE_MAX_RECORDS", 100_000),
                 e.longValue("QUEUE_MAX_BYTES", 512L << 20),
+                e.duration("AUTH_REJECT_GRACE", Duration.ofMinutes(30)),
                 e.duration("DEVICE_STALE_AFTER", Duration.ofMinutes(1)),
                 e.duration("DEVICE_OFFLINE_AFTER", Duration.ofMinutes(5)));
         e.check(c.port >= 0 && c.port <= 65535, "PORT must be between 0 and 65535");
@@ -52,6 +56,8 @@ public record Config(
         e.check(c.upstreamMaxConcurrency > 0, "UPSTREAM_MAX_CONCURRENCY must be positive");
         e.check(c.queueMaxRecords > 0, "QUEUE_MAX_RECORDS must be positive");
         e.check(c.queueMaxBytes > 0, "QUEUE_MAX_BYTES must be positive");
+        e.check(c.upstreamBulkTimeout.compareTo(c.upstreamTimeout) >= 0, "UPSTREAM_BULK_TIMEOUT must not be shorter than UPSTREAM_TIMEOUT");
+        e.check(!c.authRejectGrace.isNegative(), "AUTH_REJECT_GRACE must not be negative");
         e.check(c.offlineAfter.compareTo(c.staleAfter) > 0, "DEVICE_OFFLINE_AFTER must be longer than DEVICE_STALE_AFTER");
         e.throwIfInvalid();
         return c;

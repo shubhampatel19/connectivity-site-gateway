@@ -4,6 +4,8 @@ The on-premises gateway: it sits at a customer site between the devices and the 
 
 Part of [Connectivity](https://github.com/shubhampatel19/connectivity-platform), a mock edge-to-cloud telemetry system built for practicing production debugging.
 
+See [docs/DESIGN.md](docs/DESIGN.md) for how the code is put together and why.
+
 ## What it does
 
 - **Transparent to devices.** It serves the same `/v1` API as the cloud. A device switches to gateway mode just by setting `INGEST_URL` to the gateway.
@@ -18,7 +20,9 @@ Part of [Connectivity](https://github.com/shubhampatel19/connectivity-platform),
 |---|---|
 | Cloud returns 5xx, times out, or is unreachable | Telemetry and alerts: queues them and acks the device. Other routes: 503 to the device. |
 | Cloud returns 4xx | Passes it back; the device decides (it drops permanent rejections). |
-| Cloud rejects a queued record (4xx) | Drops that one record and counts it, so it can't block the queue. |
+| Cloud rejects a queued record (4xx other than 401/403) | Drops that one record and counts it, so it can't block the queue. |
+| Cloud refuses a queued record's credentials (401/403) | Retries with the newest token that device has presented. If that is refused too, **holds the queue** and counts `forward_failures_total{reason="http_401"}`. Only after `AUTH_REJECT_GRACE` with nothing delivered does it drop the record. A rotated signing secret therefore delays a backlog instead of destroying it. |
+| Power loss | A record is flushed to disk, and its directory entry too, before the device gets its 202. |
 | Queue full (`QUEUE_MAX_RECORDS` / `QUEUE_MAX_BYTES`) | Evicts the oldest batches and counts them. This is data loss; it is alerted on. |
 | Too many concurrent cloud calls | Waits up to `UPSTREAM_ACQUIRE_TIMEOUT` for a slot, then treats the cloud as busy. |
 | All HTTP workers busy and their queue full | Drops the connection and counts it (`connectivity_gateway_http_rejected_total`). |
@@ -64,6 +68,8 @@ Queue records are read with unknown fields ignored, so a gateway rolled back to 
 | `HTTP_THREADS` / `HTTP_QUEUE` | `32` / `256` |
 | `MAX_BODY_BYTES` | `2097152` |
 | `UPSTREAM_TIMEOUT` / `UPSTREAM_CONNECT_TIMEOUT` | `10s` / `3s` |
+| `UPSTREAM_BULK_TIMEOUT` | `2m`: bundle chunks and bundle completion |
+| `AUTH_REJECT_GRACE` | `30m`: how long credential refusals hold the queue before a record is dropped |
 | `UPSTREAM_MAX_CONCURRENCY` / `UPSTREAM_ACQUIRE_TIMEOUT` | `16` / `2s` |
 | `QUEUE_MAX_RECORDS` / `QUEUE_MAX_BYTES` | `100000` / `536870912` |
 | `DEVICE_STALE_AFTER` / `DEVICE_OFFLINE_AFTER` | `1m` / `5m` |

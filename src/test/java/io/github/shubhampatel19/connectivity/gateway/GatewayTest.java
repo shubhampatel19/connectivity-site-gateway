@@ -235,6 +235,63 @@ class GatewayTest {
         assertTrue(metrics().contains("connectivity_gateway_queue_dropped_total{reason=\"rejected\"} 1"));
     }
 
+    /** A telemetry batch from dev-1 presenting the given token. */
+    private HttpResponse<String> telemetryWithToken(String batchId, String token) throws Exception {
+        String body = "{\"batch_id\":\"" + batchId + "\",\"device_id\":\"dev-1\","
+                + "\"samples\":[{\"metric\":\"cpu_temp_c\",\"value\":50,\"ts\":\"2026-10-29T12:00:00Z\"}]}";
+        return send("POST", "/v1/telemetry", body.getBytes(StandardCharsets.UTF_8),
+                Map.of("X-Device-ID", "dev-1", "Authorization", "Bearer " + token, "Content-Type", "application/json"));
+    }
+
+    // The cloud's signing secret changed while a backlog was waiting. The
+    // backlog must be held, not thrown away, and must drain once the device
+    // has registered again and presents its new token.
+    @Test
+    void backlogSurvivesACredentialChangeAndDrainsWithTheNewToken() throws Exception {
+        cloud.telemetryStatus = 503;
+        telemetryWithToken("b1", "old");
+        telemetryWithToken("b2", "old");
+        cloud.telemetryStatus = 202;
+        cloud.requiredAuthorization = "Bearer new";
+
+        waitUntil(() -> {
+            try {
+                return metrics().contains("connectivity_gateway_forward_failures_total{reason=\"http_401\"}");
+            } catch (Exception e) {
+                return false;
+            }
+        }, "the forwarder to be refused");
+        assertEquals(2, gateway.queue().size(), "records refused for their credentials must stay queued");
+        assertFalse(metrics().contains("connectivity_gateway_queue_dropped_total{reason=\"rejected\"}"));
+
+        assertEquals(202, telemetryWithToken("b3", "new").statusCode());
+        waitUntil(() -> gateway.queue().isEmpty(), "the backlog to drain with the new token");
+        assertEquals(List.of("b1", "b2", "b3"), acceptedBatchIds());
+        assertFalse(metrics().contains("connectivity_gateway_queue_dropped_total{reason=\"rejected\"}"));
+    }
+
+    // One device whose token will never be accepted must not hold the site's
+    // queue forever: after the grace period its record is given up on.
+    @Test
+    void recordRefusedForTheWholeGracePeriodIsDropped() throws Exception {
+        cloud.telemetryStatus = 503;
+        telemetryWithToken("b1", "bad");
+        cloud.telemetryStatus = 202;
+        cloud.requiredAuthorization = "Bearer good";
+        waitUntil(() -> {
+            try {
+                return metrics().contains("connectivity_gateway_forward_failures_total{reason=\"http_401\"}");
+            } catch (Exception e) {
+                return false;
+            }
+        }, "the forwarder to be refused");
+        assertEquals(1, gateway.queue().size());
+
+        clock.advance(Duration.ofMinutes(31)); // past AUTH_REJECT_GRACE
+        waitUntil(() -> gateway.queue().isEmpty(), "the refused record to be given up on");
+        assertTrue(metrics().contains("connectivity_gateway_queue_dropped_total{reason=\"rejected\"} 1"));
+    }
+
     @Test
     void queueAndInventorySurviveRestart() throws Exception {
         cloud.telemetryStatus = 503;

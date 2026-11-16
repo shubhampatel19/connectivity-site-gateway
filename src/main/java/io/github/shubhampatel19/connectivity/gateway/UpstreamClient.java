@@ -70,14 +70,20 @@ public final class UpstreamClient {
     }
 
     public Response send(String route, String method, String path, Map<String, String> headers, byte[] body) {
+        return send(route, method, path, headers, body, timeout);
+    }
+
+    /** Like {@link #send(String, String, String, Map, byte[])}, with this request's own timeout. */
+    public Response send(String route, String method, String path, Map<String, String> headers, byte[] body,
+                         Duration requestTimeout) {
         long start = System.nanoTime();
-        Response r = doSend(method, path, headers, body);
+        Response r = doSend(method, path, headers, body, requestTimeout);
         metrics.upstreamRequests.labels(route, r.outcome().name().toLowerCase(Locale.ROOT)).add(1);
         metrics.upstreamDuration.labels(route).observe((System.nanoTime() - start) / 1e9);
         return r;
     }
 
-    private Response doSend(String method, String path, Map<String, String> headers, byte[] body) {
+    private Response doSend(String method, String path, Map<String, String> headers, byte[] body, Duration requestTimeout) {
         try {
             if (!permits.tryAcquire(acquireTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
                 return failure(Outcome.BUSY);
@@ -90,7 +96,7 @@ public final class UpstreamClient {
             HttpRequest.BodyPublisher publisher = body == null || body.length == 0
                     ? HttpRequest.BodyPublishers.noBody()
                     : HttpRequest.BodyPublishers.ofByteArray(body);
-            HttpRequest.Builder b = HttpRequest.newBuilder(base.resolve(path)).timeout(timeout).method(method, publisher);
+            HttpRequest.Builder b = HttpRequest.newBuilder(base.resolve(path)).timeout(requestTimeout).method(method, publisher);
             headers.forEach((k, v) -> {
                 if (v != null && FORWARDED_HEADERS.contains(k.toLowerCase(Locale.ROOT))) {
                     b.header(k, v);

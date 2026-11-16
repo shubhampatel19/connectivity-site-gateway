@@ -23,6 +23,8 @@ final class FakeCloud implements AutoCloseable {
     volatile int telemetryStatus = 202;
     volatile int alertsStatus = 202;
     volatile int otherStatus = 200;
+    /** When set, telemetry and alerts presenting any other Authorization header get a 401. */
+    volatile String requiredAuthorization;
     private final HttpServer server;
     private boolean closed;
 
@@ -38,6 +40,11 @@ final class FakeCloud implements AutoCloseable {
                 case "/v1/alerts" -> alertsStatus;
                 default -> otherStatus;
             };
+            String required = requiredAuthorization;
+            if (required != null && (path.equals("/v1/telemetry") || path.equals("/v1/alerts"))
+                    && !required.equals(h.get("authorization"))) {
+                code = 401;
+            }
             requests.add(new Request(ex.getRequestMethod(), path, h, body, code));
             byte[] resp = path.equals("/v1/register") && code == 200
                     ? "{\"device_id\":\"dev-1\",\"token\":\"tok\"}".getBytes(StandardCharsets.UTF_8)
